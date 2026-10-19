@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using AppInsegura.Datos;
 using AppInsegura.Modelos;
 using AppInsegura.Servicios;
@@ -7,7 +8,7 @@ namespace AppInsegura
 {
     public class Program
     {
-        private static readonly BaseDatosUsuarios baseDatos = new BaseDatosUsuarios(); //variable de lectura
+        private static readonly BaseDatosUsuarios baseDatos = new BaseDatosUsuarios();
         private static readonly AuthService auth = new AuthService(baseDatos);
         private static Usuario? usuarioActual = null;
 
@@ -16,7 +17,7 @@ namespace AppInsegura
             CargarUsuariosDeEjemplo();
 
             Console.WriteLine("=== Gestor de Usuarios y Partidas ===");
-            Console.WriteLine("(usuarios de prueba: admin/admin1234, ana/ana2024)"); //mal
+            // CORRECCIÓN F2: ya no se imprimen credenciales de prueba
             Console.WriteLine();
 
             bool salir = false;
@@ -29,36 +30,21 @@ namespace AppInsegura
                 {
                     switch (opcion)
                     {
-                        case "1":
-                            Registrar();
-                            break;
-                        case "2":
-                            IniciarSesion();
-                            break;
-                        case "3":
-                            BuscarUsuario();
-                            break;
-                        case "4":
-                            VerPerfil();
-                            break;
-                        case "5": //erroe de ejecucion terminal
-                            PanelAdministracion();
-                            break;
-                        case "6":
-                            SincronizarConServidor();
-                            break;
-                        case "0":
-                            salir = true;
-                            break;
-                        default:
-                            Console.WriteLine("Opción no válida.");
-                            break;
+                        case "1": Registrar(); break;
+                        case "2": IniciarSesion(); break;
+                        case "3": BuscarUsuario(); break;
+                        case "4": VerPerfil(); break;
+                        case "5": PanelAdministracion(); break;
+                        case "6": SincronizarConServidor(); break;
+                        case "0": salir = true; break;
+                        default: Console.WriteLine("Opción no válida."); break;
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Ha ocurrido un error inesperado:");
-                    Console.WriteLine(ex.ToString());
+                    // CORRECCIÓN F3: mensaje genérico al usuario, detalle técnico solo en log interno
+                    Console.WriteLine("Ha ocurrido un error inesperado.");
+                    RegistrarErrorInterno(ex);
                 }
 
                 Console.WriteLine();
@@ -67,10 +53,16 @@ namespace AppInsegura
             Console.WriteLine("Hasta luego.");
         }
 
-        private static void CargarUsuariosDeEjemplo() //mal
+        private static void RegistrarErrorInterno(Exception ex)
         {
-            auth.Registrar("admin", "admin1234", "admin");
-            auth.Registrar("ana", "ana2024", "jugador");
+            try { File.AppendAllText("app_errores.log", $"{DateTime.Now:u} - {ex}\n"); }
+            catch { /* si no se puede escribir el log, no rompemos la app por esto */ }
+        }
+
+        private static void CargarUsuariosDeEjemplo()
+        {
+            auth.Registrar("admin", "AdminClave#2024", "admin");
+            auth.Registrar("ana", "AnaClave#2024", "jugador");
         }
 
         private static void MostrarMenu()
@@ -82,9 +74,7 @@ namespace AppInsegura
             Console.WriteLine("3. Buscar usuario por nombre");
             Console.WriteLine("4. Ver mi perfil");
             if (usuarioActual != null && usuarioActual.Rol == "admin")
-            {
                 Console.WriteLine("5. Panel de administración");
-            }
             Console.WriteLine("6. Sincronizar partida con el servidor");
             Console.WriteLine("0. Salir");
             Console.Write("Elige una opción: ");
@@ -97,8 +87,15 @@ namespace AppInsegura
             Console.Write("Contraseña: ");
             string contrasena = Console.ReadLine() ?? "";
 
-            Usuario nuevo = auth.Registrar(nombre, contrasena);
-            Console.WriteLine($"Usuario '{nuevo.Nombre}' registrado con rol '{nuevo.Rol}'.");
+            try
+            {
+                Usuario nuevo = auth.Registrar(nombre, contrasena);
+                Console.WriteLine($"Usuario '{nuevo.Nombre}' registrado con rol '{nuevo.Rol}'.");
+            }
+            catch (ArgumentException ex) // CORRECCIÓN F5
+            {
+                Console.WriteLine($"No se ha podido registrar: {ex.Message}");
+            }
         }
 
         private static void IniciarSesion()
@@ -108,22 +105,18 @@ namespace AppInsegura
             Console.Write("Contraseña: ");
             string contrasena = Console.ReadLine() ?? "";
 
-            Usuario? usuario = auth.IniciarSesion(nombre, contrasena); //mal solo comprobe la contra
+            Usuario? usuario = auth.IniciarSesion(nombre, contrasena);
             if (usuario == null)
             {
                 Console.WriteLine("Usuario o contraseña incorrectos.");
                 return;
-            }/*else if(contrasena == null) 
-            {
-                Console.WriteLine("ad");
-                return;
-            }*/
+            }
 
             usuarioActual = usuario;
             Console.WriteLine($"Bienvenido, {usuario.Nombre}.");
         }
 
-        private static void BuscarUsuario() //al abrir y cerrar la app no encuetra el usuario coreado previamente 
+        private static void BuscarUsuario()
         {
             Console.Write("Nombre a buscar: ");
             string nombre = Console.ReadLine() ?? "";
@@ -149,12 +142,18 @@ namespace AppInsegura
 
         private static void PanelAdministracion()
         {
+            // CORRECCIÓN F4: comprobación de autorización dentro del propio método,
+            // no solo ocultando la opción en el menú
+            if (usuarioActual == null || usuarioActual.Rol != "admin")
+            {
+                Console.WriteLine("Acceso denegado: no tienes permisos de administrador.");
+                return;
+            }
+
             Console.WriteLine("=== PANEL DE ADMINISTRACIÓN ===");
             Console.WriteLine("Lista de usuarios registrados:");
             foreach (Usuario u in baseDatos.ListarTodos())
-            {
                 Console.WriteLine($" - {u.Nombre} ({u.Rol})");
-            }
         }
 
         private static void SincronizarConServidor()
@@ -166,7 +165,7 @@ namespace AppInsegura
             }
 
             var red = new RedService();
-            red.EnviarPuntuacion(usuarioActual.Nombre, 1000); 
+            red.EnviarPuntuacion(usuarioActual.Nombre, 1000);
         }
     }
 }

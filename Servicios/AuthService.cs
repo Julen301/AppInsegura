@@ -1,15 +1,14 @@
 using System;
-using System.IO;
 using System.Security.Cryptography;
-using System.Text;
 using AppInsegura.Datos;
 using AppInsegura.Modelos;
 
 namespace AppInsegura.Servicios
 {
-    public class AuthService 
+    public class AuthService
     {
         private readonly BaseDatosUsuarios baseDatos;
+        private const int MaxIntentosFallidos = 5; // CORRECCIÓN F10
 
         public AuthService(BaseDatosUsuarios baseDatos)
         {
@@ -18,10 +17,19 @@ namespace AppInsegura.Servicios
 
         public Usuario Registrar(string nombre, string contrasena, string rol = "jugador")
         {
+            // CORRECCIÓN F5: validación básica de entrada (lista blanca)
+            if (string.IsNullOrWhiteSpace(nombre) || nombre.Length > 20)
+                throw new ArgumentException("Nombre de usuario no válido.");
+            if (string.IsNullOrWhiteSpace(contrasena) || contrasena.Length < 8)
+                throw new ArgumentException("La contraseña debe tener al menos 8 caracteres.");
+
+            byte[] sal = GenerarSal(); // CORRECCIÓN F6: sal aleatoria segura por usuario
+
             var nuevo = new Usuario
             {
                 Nombre = nombre,
-                ContrasenaHash = CalcularHash(contrasena),
+                ContrasenaSal = Convert.ToBase64String(sal),
+                ContrasenaHash = CalcularHash(contrasena, sal),
                 Rol = rol,
                 TokenSesion = ""
             };
@@ -33,42 +41,59 @@ namespace AppInsegura.Servicios
         public Usuario? IniciarSesion(string nombre, string contrasena)
         {
             Usuario? usuario = baseDatos.BuscarExacto(nombre);
-            if (usuario == null)
+            if (usuario == null) return null;
+
+            // CORRECCIÓN F10: fallar de forma segura tras demasiados intentos
+            if (usuario.IntentosFallidos >= MaxIntentosFallidos)
             {
+                Console.WriteLine("Cuenta bloqueada temporalmente por demasiados intentos fallidos.");
                 return null;
             }
 
-            string hashIntento = CalcularHash(contrasena);
-            if (usuario.ContrasenaHash != hashIntento) //rerete
+            byte[] sal = Convert.FromBase64String(usuario.ContrasenaSal);
+            string hashIntento = CalcularHash(contrasena, sal);
+
+            if (usuario.ContrasenaHash != hashIntento)
             {
+                usuario.IntentosFallidos++;
                 return null;
             }
 
+            usuario.IntentosFallidos = 0;
             usuario.TokenSesion = GenerarTokenSesion();
 
-            Console.WriteLine($"[LOG] Login correcto -> usuario: {usuario.Nombre}, token: {usuario.TokenSesion}");
+            // CORRECCIÓN F8: ya no se registra el token en el log, solo el evento
+            Console.WriteLine($"[LOG] Login correcto -> usuario: {usuario.Nombre}");
 
-            GuardarSesionEnDisco(usuario);
+            // CORRECCIÓN F9: se elimina el guardado de la sesión en disco en texto plano.
+            // La sesión vive solo en memoria mientras dura la ejecución.
 
             return usuario;
         }
 
-        private string CalcularHash(string contrasena) //mal la funsio md5 mal 
+        // CORRECCIÓN F6: PBKDF2 con sal en vez de MD5 sin sal (librería estándar del sistema)
+        private string CalcularHash(string contrasena, byte[] sal)
         {
-            using MD5 md5 = MD5.Create();
-            byte[] bytes = md5.ComputeHash(Encoding.UTF8.GetBytes(contrasena));
-            return Convert.ToHexString(bytes);
+            using var pbkdf2 = new Rfc2898DeriveBytes(contrasena, sal, 100_000, HashAlgorithmName.SHA256);
+            byte[] hash = pbkdf2.GetBytes(32);
+            return Convert.ToBase64String(hash);
         }
 
+        private byte[] GenerarSal()
+        {
+            byte[] sal = new byte[16];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(sal);
+            return sal;
+        }
+
+        // CORRECCIÓN F7: generador criptográficamente seguro y token más largo
         private string GenerarTokenSesion()
         {
-            var random = new Random();
-            return random.Next(100000, 999999).ToString();
-        }
-
-        private void GuardarSesionEnDisco(Usuario usuario) //el ususari no se guiarda una vez zerrada la app
-        {
-            File.WriteAllText("sesion.txt", $"{usuario.Nombre}:{usuario.TokenSesion}");
+            byte[] tokenBytes = new byte[32];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(tokenBytes);
+            return Convert.ToHexString(tokenBytes);
         }
     }
 }
